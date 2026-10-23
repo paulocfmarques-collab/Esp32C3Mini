@@ -1,8 +1,31 @@
 #include "ProcessadorComandos.h"
 #include "Log.h"
 #include "CrashDiagnostics.h"
+#include "IntegracaoHomeAssistant.h"
 #include <WiFi.h>
+#include <string.h>
 #include <esp_system.h> // Necessário para extrair a causa real do reset
+
+extern IntegracaoHomeAssistant homeAssistant;
+
+namespace
+{
+class RespostaUdpMonitorada : public Print
+{
+  public:
+    explicit RespostaUdpMonitorada(WiFiUDP& udp) : udp(udp) {}
+    bool completa = true;
+    size_t write(uint8_t valor) override { return write(&valor, 1); }
+    size_t write(const uint8_t* dados, size_t tamanho) override
+    {
+        size_t escritos = udp.write(dados, tamanho);
+        if (escritos != tamanho) completa = false;
+        return escritos;
+    }
+  private:
+    WiFiUDP& udp;
+};
+}
 
 ProcessadorComandos::ProcessadorComandos(MonitorAmbiental& monitor) : _monitor(monitor)
 {
@@ -11,8 +34,12 @@ ProcessadorComandos::ProcessadorComandos(MonitorAmbiental& monitor) : _monitor(m
 
 void ProcessadorComandos::iniciar()
 {
-    _udp.begin(_portaUdp);
-    LOG_INFO(("Servidor UDP de comandos iniciado na porta " + String(_portaUdp)).c_str());
+    _ultimaTentativaUdp = millis();
+    _udpAtivo = _udp.begin(_portaUdp) == 1;
+    if (_udpAtivo)
+        LOG_INFO(("Servidor UDP de comandos iniciado na porta " + String(_portaUdp)).c_str());
+    else
+        LOG_ERROR("Falha ao abrir porta UDP de comandos; nova tentativa em 10 segundos");
 }
 
 void ProcessadorComandos::atualizar()
@@ -37,23 +64,38 @@ void ProcessadorComandos::atualizar()
     }
 
     // 2. Escuta comandos vindo da Rede via pacotes UDP
-    int packetSize = _udp.parsePacket();
-    if (packetSize)
+    if (!_udpAtivo && millis() - _ultimaTentativaUdp >= 10000)
     {
+        _ultimaTentativaUdp = millis();
+        _udpAtivo = _udp.begin(_portaUdp) == 1;
+    }
+    if (!_udpAtivo) return;
+    int packetSize = _udp.parsePacket();
+    if (packetSize > 0)
+    {
+        ++_udpRecebidos;
+        const IPAddress remoto = _udp.remoteIP();
+        const uint16_t portaRemota = _udp.remotePort();
         int len = _udp.read(_packetBuffer, 255);
-        if (len > 0)
-        {
-            _packetBuffer[len] = 0;
-        }
-
+        _packetBuffer[len > 0 ? len : 0] = 0;
+        while (_udp.available() > 0) _udp.read();
         String comandoUdp = String(_packetBuffer);
         comandoUdp.trim();
-
-        if (comandoUdp.length() > 0)
+        const bool invalido = packetSize > 255 || len != packetSize ||
+                              (len > 0 && memchr(_packetBuffer, '\0', len) != nullptr);
+        if (invalido || comandoUdp.length() > 0)
         {
-            _udp.beginPacket(_udp.remoteIP(), _udp.remotePort());
-            processarString(comandoUdp, _udp);
-            _udp.endPacket();
+            if (_udp.beginPacket(remoto, portaRemota) != 1)
+            {
+                ++_udpErros;
+                return;
+            }
+            RespostaUdpMonitorada resposta(_udp);
+            if (invalido) resposta.println("[ERRO] Pacote UDP invalido, incompleto ou maior que 255 bytes.");
+            else processarString(comandoUdp, resposta);
+            const bool enviado = _udp.endPacket() == 1;
+            if (enviado && resposta.completa) ++_udpRespostas;
+            else ++_udpErros;
         }
     }
 }
@@ -171,18 +213,54 @@ void ProcessadorComandos::executarComandoBase(const String& cmd, const String& a
     // ---- CONFIGURAÇÃO DO MENU HELP ----
     if (cmd == "help")
     {
-        resposta.println("--- Comandos Disponiveis ---");
-        resposta.println("-> Sistema: help, info, status, version, alive, uptime, reboot, "
-                         "reset_counters, crash_info, name");
-        resposta.println("-> Hardware: temp, cpu, chip_info, ram, heap, heap_min, flash");
-        resposta.println(
-            "-> Tela: tela_on, tela_off, tela_status (aliases: lcd_on, lcd_off, lcd_status)");
-        resposta.println("-> Rede: net_info, wifi_status, ssid, mac, rssi, ip");
-        resposta.println("         wifi_add:SSID|SENHA | wifi_clear | wifi_clear:SSID");
-        resposta.println(
-            "-> Hora: time, date, ntp_status, set_fuso:N, dst_on, dst_off, dst_status");
-        resposta.println(
-            "-> Clima: clima, clima_sync (atualizar API), clima_age / age (idade dos dados externos)");
+        resposta.println("COMANDOS");
+        resposta.println("help");
+        resposta.println("info");
+        resposta.println("status");
+        resposta.println("version");
+        resposta.println("alive");
+        resposta.println("uptime");
+        resposta.println("reboot");
+        resposta.println("reset_counters");
+        resposta.println("crash_info");
+        resposta.println("name");
+        resposta.println("temp");
+        resposta.println("cpu");
+        resposta.println("chip_info");
+        resposta.println("ram");
+        resposta.println("heap");
+        resposta.println("heap_min");
+        resposta.println("flash");
+        resposta.println("tela_on");
+        resposta.println("lcd_on");
+        resposta.println("tela_off");
+        resposta.println("lcd_off");
+        resposta.println("tela_status");
+        resposta.println("lcd_status");
+        resposta.println("net_info");
+        resposta.println("wifi_status");
+        resposta.println("ssid");
+        resposta.println("mac");
+        resposta.println("rssi");
+        resposta.println("ip");
+        resposta.println("wifi_add:SSID|SENHA");
+        resposta.println("wifi_clear");
+        resposta.println("wifi_clear:SSID");
+        resposta.println("ha_status");
+        resposta.println("ha_user");
+        resposta.println("ha_password");
+        resposta.println("ha_discovery");
+        resposta.println("time");
+        resposta.println("date");
+        resposta.println("ntp_status");
+        resposta.println("set_fuso:N");
+        resposta.println("dst_on");
+        resposta.println("dst_off");
+        resposta.println("dst_status");
+        resposta.println("clima");
+        resposta.println("clima_sync");
+        resposta.println("clima_age");
+        resposta.println("age");
     }
     else if (cmd == "tela_on" || cmd == "lcd_on" || cmd == "tela_off" || cmd == "lcd_off")
     {
@@ -194,6 +272,23 @@ void ProcessadorComandos::executarComandoBase(const String& cmd, const String& a
     else if (cmd == "tela_status" || cmd == "lcd_status")
     {
         resposta.println(_monitor.telaLigada() ? "[TELA] Ligada." : "[TELA] Desligada.");
+    }
+    else if (cmd == "ha_user")
+    {
+        resposta.println(homeAssistant.obterUsuarioCadastrado());
+    }
+    else if (cmd == "ha_password")
+    {
+        resposta.println(homeAssistant.obterSenhaCadastrada());
+    }
+    else if (cmd == "ha_status")
+    {
+        resposta.println("[HA] " + homeAssistant.status());
+    }
+    else if (cmd == "ha_discovery")
+    {
+        homeAssistant.redescobrir();
+        resposta.println("[HA] Descoberta solicitada; sera publicada quando o MQTT estiver conectado e ativo.");
     }
     else if (cmd == "name")
     {

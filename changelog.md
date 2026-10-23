@@ -1,5 +1,100 @@
 # Histórico do ESP32C3Mini
 
+## Ícones na tela inicial — 2026-10-21
+
+- Substituídos T: e U: pelos ícones personalizados de termômetro e gota,
+  usando os slots CGRAM 1 e 2 já carregados na inicialização.
+- Mantidas as colunas LOCAL/POA, unidades, indicação LOCAL* e limite de
+  dez caracteres por coluna. Sem alteração das leituras ou do botão.
+- Compilação e conferência física do LCD ficam com o usuário.
+
+## Cabeçalho POA e falhas pontuais do DHT22 — 2026-10-21
+
+- Abreviado o título externo no LCD para POA, com coluna local de dez posições.
+- Somente no LCD, falhas pontuais reaproveitam uma amostra válida de menos
+  de dez segundos, com indicação LOCAL*. Ao expirar o prazo, volta a `--`.
+- Timestamp atualizado apenas na aquisição válida real, por timer monotônico.
+  APIs, MQTT e Prometheus preservam o comportamento de amostra inválida.
+- Não alterado o leitor para desabilitar interrupções ou retirar limites de
+  tempo. A causa física/temporal de leituras descartadas ainda exige teste
+  na placa. Compilação e gravação ficam com o usuário.
+
+## Documentação dos pinos — 2026-10-21
+
+- Criado [pinos_e_diagrama.md](pinos_e_diagrama.md), com GPIOs utilizados,
+  alimentação/GND, ligação do botão, diagrama de sinais e diagrama funcional
+  das integrações de rede. Mapeamento conferido no código atual.
+- Documentadas as restrições de níveis I²C e boot, sem presumir a alimentação
+  ou o esquema elétrico dos módulos físicos. Sem alteração do firmware.
+
+## Retorno automático do LCD — 2026-10-21
+
+- Página de rede retorna ao início após 15 segundos sem interação física.
+- Eventos do botão reiniciam o prazo. A regra só atua com tela ligada e fora
+  da página inicial, sem apagar a iluminação ou interromper outras funções.
+- Usada subtração de tempo sem sinal para tolerar overflow de millis;
+  retorno aplicado no loop principal. Compilação e teste ficam com o usuário.
+
+## Botão externo e duas páginas LCD — 2026-10-21
+
+- Configurado botão normalmente aberto no GPIO 3, entre GPIO e GND,
+  com pull-up interno e debounce de 40 ms.
+- Segurar por cinco segundos apaga a tela; toque com ela apagada acende e
+  volta ao início. O mesmo gesto de despertar não dispara outra ação.
+- Toque curto com tela acesa alterna entre duas páginas: condições ambientais
+  e status da rede. Gesto longo dispara uma vez e soltar não religa.
+- Tela inicial mostra data/hora e temperatura/umidade locais e externas em
+  quatro linhas. Segunda página mostra conexão, IP, SSID e sinal Wi-Fi.
+- Clock renderizado sem espera por NTP, a cada segundo; escritas I2C apenas
+  nas linhas alteradas, com preenchimento/truncamento em 20 colunas.
+- Sensor local continua sendo lido sem Wi-Fi. Removido o carrossel automático
+  de IP/hora/data da tela principal.
+- Detecção do botão em tarefa com fila, sem I2C fora do loop principal;
+  fallback para leitura no loop se faltar memória. Chamadas síncronas de rede
+  ainda podem atrasar a aplicação de eventos. Eventos ignorados durante OTA,
+  com retomada da navegação se a atualização falhar.
+- Compilação e validação física ficam com o usuário.
+- Simulação das funções extraídas conferiu debounce, limite de cinco segundos,
+  disparo único, despertar sem ação adicional, alternância de duas páginas,
+  bloqueio durante OTA e overflow de millis. Textos conferidos para 20×4;
+  essa verificação não substitui compilação nem teste do botão/LCD na placa.
+
+## Consulta de credenciais Home Assistant — 2026-10-21
+
+- Adicionados `ha_user` e `ha_password` à ajuda e ao processador compartilhado
+  por serial, UDP e web. Retornam o valor cadastrado sem prefixo; a senha é
+  devolvida em texto claro por solicitação do usuário.
+- A consulta considera a configuração recém-salva aguardando reconexão e
+  funciona com MQTT desativado. Valores vazios geram linha vazia.
+- Não alterada a persistência; credenciais continuam fora das métricas e
+  dos logs automáticos. Compilação e teste na placa ficam com o usuário.
+
+## 2026-10-21 — Formato parseável do help
+
+- Padronizada a resposta de `help` com o cabeçalho `COMANDOS` e um comando
+  por linha, para facilitar o parseamento automático.
+- Atualizado o guia de comandos.
+
+## Home Assistant e métricas UDP — 2026-10-19
+
+- Adicionada integração MQTT Discovery, desativada por padrão, configurável
+  por `/homeassistant` e persistida em `homeassistant/config` nas Preferences.
+- Nova dependência: PubSubClient >= 2.8, de Nick O'Leary, para instalar na IDE.
+- Descoberta de sete sensores, switch LCD e botão para consulta climática;
+  identificadores por MAC, disponibilidade Last Will, expiração dos sensores,
+  reconexão espaçada e redescoberta após nascimento MQTT do Home Assistant.
+- Adicionados `ha_status`, `ha_discovery` e publicação real das métricas MQTT.
+- Adicionadas `esp_udp_listener_up`, `esp_udp_packets_received_total`,
+  `esp_udp_replies_sent_total`, `esp_udp_send_errors_total`.
+- Abertura UDP agora valida resultado e tenta novamente a cada dez segundos
+  em caso de falha; envio acompanha beginPacket, escrita e endPacket.
+- Datagrama incompleto/maior que 255 bytes é descartado com resposta de erro,
+  sem executar comando truncado. Buffer de leitura não reaproveita texto antigo.
+- Documentados limites e roteiro de teste; compilação e placa ficam com o usuário.
+- Conferidos os JSONs das nove entidades, IDs únicos, tópicos, classes,
+  expiração para intervalos de 10/30/3600 segundos e tamanho no buffer MQTT.
+  Isso não substitui compilação nem teste com o broker/placa.
+
 ## Painéis SD sem séries — 2026-10-19
 
 - Removida a emissão de todas as séries `sdcard_*`, incluindo capacidade,

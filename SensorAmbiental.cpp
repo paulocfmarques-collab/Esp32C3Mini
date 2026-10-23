@@ -1,6 +1,7 @@
 #include "SensorAmbiental.h"
 #include <math.h>
 #include "Log.h"
+#include <esp_timer.h>
 
 bool LeituraAmbiental::valida() const
 {
@@ -17,6 +18,22 @@ void SensorAmbiental::iniciar()
     pinMode(pino, INPUT_PULLUP);
     ultimaTentativa = millis(); // Aguarde a estabilização do DHT22 ao ligar.
     ultimaLeitura = {NAN, NAN};
+    ultimaValida = {NAN, NAN};
+    ultimaValidaUs = -1;
+}
+
+LeituraAmbiental SensorAmbiental::lerParaDisplay(bool& emCache)
+{
+    const LeituraAmbiental atual = ler();
+    emCache = false;
+    if (atual.valida()) return atual;
+    // Só o LCD reaproveita uma amostra recente. APIs e métricas mantêm a falha.
+    if (ultimaValidaUs >= 0 && esp_timer_get_time() - ultimaValidaUs < 10000000LL)
+    {
+        emCache = true;
+        return ultimaValida;
+    }
+    return {NAN, NAN};
 }
 
 bool SensorAmbiental::aguardarPulso(uint8_t nivel, uint32_t inicioQuadro,
@@ -81,6 +98,8 @@ LeituraAmbiental SensorAmbiental::ler()
         if (umidade <= 100 && temperatura >= -40 && temperatura <= 80)
         {
             ultimaLeitura = {temperatura, umidade};
+            ultimaValida = ultimaLeitura;
+            ultimaValidaUs = esp_timer_get_time();
         }
     }
 

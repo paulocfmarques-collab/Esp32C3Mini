@@ -7,13 +7,6 @@
 #include <stdint.h>
 #include <esp_timer.h>
 
-enum EstadoStatus
-{
-    EXIBIR_IP,
-    EXIBIR_HORA,
-    EXIBIR_DATA
-};
-
 namespace
 {
 struct PersistentBootCounters
@@ -71,7 +64,81 @@ uint32_t MonitorAmbiental::obterWatchdogs() const { return contadoresAtuais.watc
 
 void MonitorAmbiental::iniciarAtualizacaoOta()
 {
+    otaEmAndamento = true;
     display.iniciarAtualizacaoOta();
+}
+
+void MonitorAmbiental::definirTelaLigada(bool ligada)
+{
+    display.definirLigada(ligada);
+    if (ligada)
+    {
+        paginaLcd = 0;
+        ultimaInteracaoLcd = millis();
+        atualizarLcd = true;
+    }
+}
+
+void MonitorAmbiental::tarefaBotao(void* contexto)
+{
+    auto* monitor = static_cast<MonitorAmbiental*>(contexto);
+    for (;;)
+    {
+        const auto evento = monitor->botao.atualizar(digitalRead(PINO_BOTAO) == LOW, millis());
+        if (evento != BotaoExterno::Nenhum)
+        {
+            // Apenas enfileire eventos: I2C e estado da tela pertencem ao loop principal.
+            xQueueSend(monitor->filaBotao, &evento, 0);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void MonitorAmbiental::iniciarBotao()
+{
+    pinMode(PINO_BOTAO, INPUT_PULLUP);
+    filaBotao = xQueueCreate(16, sizeof(BotaoExterno::Evento));
+    if (filaBotao && xTaskCreate(tarefaBotao, "botao", 2048, this, 1, nullptr) == pdPASS)
+        return;
+    if (filaBotao) vQueueDelete(filaBotao);
+    filaBotao = nullptr;
+    LOG_WARN("[BOTAO] Sem memoria para tarefa; usando leitura pelo loop");
+}
+
+void MonitorAmbiental::tratarEventoBotao(BotaoExterno::Evento evento)
+{
+    if (otaEmAndamento) return;
+    if (evento != BotaoExterno::Nenhum) ultimaInteracaoLcd = millis();
+    if (evento == BotaoExterno::Pressionado)
+    {
+        ignorarGestoBotao = !display.estaLigada();
+        if (ignorarGestoBotao) definirTelaLigada(true);
+    }
+    else if (evento == BotaoExterno::Longo)
+    {
+        if (!ignorarGestoBotao && display.estaLigada()) definirTelaLigada(false);
+        ignorarGestoBotao = true;
+    }
+    else if (evento == BotaoExterno::Solto)
+    {
+        if (!ignorarGestoBotao && display.estaLigada())
+        {
+            paginaLcd = (paginaLcd + 1) % 2;
+            atualizarLcd = true;
+        }
+        ignorarGestoBotao = false;
+    }
+}
+
+void MonitorAmbiental::processarBotao()
+{
+    if (!filaBotao)
+    {
+        tratarEventoBotao(botao.atualizar(digitalRead(PINO_BOTAO) == LOW, millis()));
+        return;
+    }
+    BotaoExterno::Evento evento;
+    while (xQueueReceive(filaBotao, &evento, 0) == pdTRUE) tratarEventoBotao(evento);
 }
 
 void MonitorAmbiental::mostrarProgressoOta(uint8_t porcentagem)
@@ -91,6 +158,7 @@ void MonitorAmbiental::iniciar()
     Wire.begin(8, 9);
     display.iniciar(); // Desenha a tela de boot vazia com o casco da barra
     sensor.iniciar();
+    iniciarBotao();
 
     Preferences prefs;
     prefs.begin("wifi", true);
@@ -125,103 +193,59 @@ bool MonitorAmbiental::zerarContadores()
 
 void MonitorAmbiental::atualizar()
 {
+    processarBotao();
     wifi.processar();
+    if (otaEmAndamento) return;
 
-    unsigned long tempoAtual = millis();
-    static unsigned long ultimaLeitura = 0;
-    static unsigned long ultimaAlternancia = 0;
-    static unsigned long ultimoPassoBarra = 0;
-    static uint8_t passoAnimacao = 0;
-
-    // Variáveis de histórico para cálculo de tendência térmica
-    static float ultimaTemperatura = -999.0;
-    static EstadoStatus estadoAtual = EXIBIR_IP;
-
-    // FASE A: Se o Wi-Fi não estiver conectado, atualiza a animação da barra de progresso
-    if (!wifi.conectado())
+    const uint32_t agora = millis();
+    if (display.estaLigada() && paginaLcd != 0 && agora - ultimaInteracaoLcd >= 15000UL)
     {
-        if (tempoAtual - ultimoPassoBarra >= 500) // Incrementa 1 bloco a cada 500ms
-        {
-            ultimoPassoBarra = tempoAtual;
-            display.exibirProgressoConexao(passoAnimacao);
-            passoAnimacao++;
+        paginaLcd = 0;
+        atualizarLcd = true;
+    }
+    static uint32_t ultimaLeitura = 0;
+    static uint32_t ultimaTela = 0;
+    static float temperaturaAnterior = NAN;
 
-            // Se estourar o limite visual dos colchetes, reseta limpando a linha
-            if (passoAnimacao > 18)
+    // Mantenha o sensor local ativo também quando a rede estiver desconectada.
+    if (agora - ultimaLeitura >= 2000)
+    {
+        ultimaLeitura = agora;
+        leituraLcd = sensor.ler();
+        if (leituraLcd.valida())
+        {
+            _tendenciaAtual = 0;
+            if (isfinite(temperaturaAnterior))
             {
-                passoAnimacao = 0;
+                if (leituraLcd.temperatura > temperaturaAnterior + 0.05f) _tendenciaAtual = 1;
+                else if (leituraLcd.temperatura < temperaturaAnterior - 0.05f) _tendenciaAtual = -1;
             }
+            temperaturaAnterior = leituraLcd.temperatura;
         }
-        return; // Bloqueia a telemetria até estabelecer o IP estável
+        atualizarLcd = true;
     }
 
-    if (!climaConsultado || tempoAtual - ultimaLeituraPoa >= 900000UL)
+    if (display.estaLigada() && (atualizarLcd || agora - ultimaTela >= 1000))
+    {
+        struct tm tempo;
+        char dataHora[21] = "--/--/---- --:--:--";
+        if (getLocalTime(&tempo, 0))
+            strftime(dataHora, sizeof(dataHora), "%d/%m/%Y %H:%M:%S", &tempo);
+        const bool conectado = wifi.conectado();
+        bool localEmCache = false;
+        const LeituraAmbiental leituraExibida = sensor.lerParaDisplay(localEmCache);
+        display.mostrarPagina(paginaLcd, dataHora, leituraExibida, climaPoa.temperatura,
+                              climaPoa.umidade, conectado ? wifi.obterIp() : WiFi.softAPIP().toString(),
+                              WiFi.SSID(), conectado ? WiFi.RSSI() : 0, conectado, localEmCache);
+        ultimaTela = agora;
+        atualizarLcd = false;
+    }
+
+    processarBotao();
+    if (wifi.conectado() && (!climaConsultado || agora - ultimaLeituraPoa >= 900000UL))
+    {
         forcarSincronizacaoClima();
-
-    // FASE B: Wi-Fi Conectado. Executa carrossel e monitoramento de sensores
-    if (tempoAtual - ultimaLeitura >= 2000)
-    {
-        ultimaLeitura = tempoAtual;
-        LeituraAmbiental leitura = sensor.ler();
-
-        // Procure por esta linha dentro do loop condicional de leitura do sensor (2000ms):
-        if (leitura.valida())
-        {
-            LOG_INFO("Atualizando display com calculo de tendencia");
-
-            if (ultimaTemperatura != -999.0)
-            {
-                if (leitura.temperatura > ultimaTemperatura + 0.05)
-                {
-                    _tendenciaAtual = 1; // Temperatura subindo ▲
-                }
-                else if (leitura.temperatura < ultimaTemperatura - 0.05)
-                {
-                    _tendenciaAtual = -1; // Temperatura caindo ▼
-                }
-                else
-                {
-                    _tendenciaAtual = 0; // Estável
-                }
-            }
-
-            ultimaTemperatura = leitura.temperatura;
-            display.mostrarLeituraComDadosExternos(leitura, _tendenciaAtual,
-                                                   climaPoa.temperatura, climaPoa.umidade);
-        }
-    }
-
-    // Alternância do carrossel da 4ª linha (IP, Hora, Data)
-    if (tempoAtual - ultimaAlternancia >= 3000)
-    {
-        ultimaAlternancia = tempoAtual;
-
-        switch (estadoAtual)
-        {
-        case EXIBIR_IP:
-        {
-            String ip = wifi.obterIp();
-            display.atualizarLinhaStatus(ip.isEmpty() ? "CONECTANDO" : ip);
-            estadoAtual = EXIBIR_HORA;
-        }
-        break;
-
-        case EXIBIR_HORA:
-        {
-            String hora = relogio.obterHora();
-            display.atualizarLinhaStatus(hora == "--:--:--" ? "SINC. NTP" : hora);
-            estadoAtual = EXIBIR_DATA;
-        }
-        break;
-
-        case EXIBIR_DATA:
-        {
-            String data = relogio.obterData();
-            display.atualizarLinhaStatus(data == "--/--/----" ? "SINC. NTP" : data);
-            estadoAtual = EXIBIR_IP;
-        }
-        break;
-        }
+        atualizarLcd = true;
     }
 }
 

@@ -1,5 +1,7 @@
 #include "ServicoPrometheus.h"
 #include "MonitorAmbiental.h"
+#include "IntegracaoHomeAssistant.h"
+#include "ProcessadorComandos.h"
 #include "Log.h"
 #include <Preferences.h>
 #include <WiFi.h>
@@ -13,6 +15,9 @@
 #include <new>
 #include <string.h>
 #include <initializer_list>
+
+extern IntegracaoHomeAssistant homeAssistant;
+extern ProcessadorComandos processador;
 
 namespace
 {
@@ -362,6 +367,18 @@ String ServicoPrometheus::metricas()
            "source=\"open_meteo\",location=\"porto_alegre\"");
     emitir("esp_weather_data_age_seconds", monitor->obterIdadeClimaSegundos(),
            "Seconds since last successful retrieval of Porto Alegre weather; NaN before first success.");
+    emitir("esp_udp_listener_up", processador.udpListenerAtivo() ? 1 : 0,
+           "UDP command listener bind succeeded (port 4210). Not a remote delivery probe.");
+    emitir("esp_udp_packets_received_total", processador.udpPacotesRecebidos(),
+           "Nonempty UDP datagrams reported by parsePacket since boot, including invalid commands.", "counter");
+    emitir("esp_udp_replies_sent_total", processador.udpRespostasEnviadas(),
+           "UDP replies completely written and accepted by endPacket since boot; not delivery acknowledgements.", "counter");
+    emitir("esp_udp_send_errors_total", processador.udpErrosEnvio(),
+           "UDP reply attempts with beginPacket, write or endPacket failure since boot.", "counter");
+    emitir("mqtt_connected", homeAssistant.conectado() ? 1 : 0, "Home Assistant MQTT client connected to broker.");
+    emitir("mqtt_messages_sent", homeAssistant.mensagensEnviadas(), "Successful MQTT publish calls since boot, including discovery and availability.", "counter");
+    emitir("mqtt_messages_received", homeAssistant.mensagensRecebidas(), "MQTT messages delivered to callback since boot.", "counter");
+    emitir("mqtt_publish_errors", homeAssistant.errosPublicacao(), "Failed MQTT publish calls since boot.", "counter");
     emitir("esp_lcd_on", monitor->telaLigada() ? 1 : 0, "LCD display and backlight enabled.");
 
     const char* indisponiveis[] = {"esp_voltage_v",
@@ -376,11 +393,7 @@ String ServicoPrometheus::metricas()
                                    "relay_runtime_seconds",
                                    "gpio_digital_input",
                                    "gpio_digital_output",
-                                   "gpio_analog_value",
-                                   "mqtt_connected",
-                                   "mqtt_messages_sent",
-                                   "mqtt_messages_received",
-                                   "mqtt_publish_errors"};
+                                   "gpio_analog_value"};
     for (const char* nome : indisponiveis)
         ausente(nome);
     // Sem integração SD, não publique séries sdcard_* (nem zero nem NaN).
@@ -388,10 +401,11 @@ String ServicoPrometheus::metricas()
     texto += "# HELP esp_metric_supported Whether the integration is implemented (not hardware "
              "presence).\n# TYPE esp_metric_supported gauge\n";
     for (const char* grupo :
-         {"energy", "pressure", "air_quality", "relays", "gpio", "mqtt", "sdcard"})
+         {"energy", "pressure", "air_quality", "relays", "gpio", "sdcard"})
         texto +=
             "esp_metric_supported{device=\"" + device + "\",group=\"" + String(grupo) + "\"} 0\n";
     texto += "esp_metric_supported{device=\"" + device + "\",group=\"dht22\"} 1\n";
+    texto += "esp_metric_supported{device=\"" + device + "\",group=\"mqtt\"} 1\n";
     texto += "esp_metric_supported{device=\"" + device + "\",group=\"cpu_temperature\"} 1\n";
 #if configUSE_TRACE_FACILITY && configGENERATE_RUN_TIME_STATS
     texto += "esp_metric_supported{device=\"" + device + "\",group=\"cpu_usage\"} 1\n";
@@ -477,7 +491,7 @@ void ServicoPrometheus::pagina(WebServer& web)
         WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
     html += "<p><a href='http://" + ip + ":" + String(config.portaMetricas) +
             "/metrics' target='_blank' rel='noopener'>Ver métricas do monitor →</a></p>";
-    html += "<p>Energia, pressão, qualidade do ar, relés, GPIO e MQTT sem integração retornam NaN. "
+    html += "<p>Energia, pressão, qualidade do ar, relés e GPIO sem integração retornam NaN. "
             "Métricas de SD e logs do cartão não são exportadas, para os painéis indicarem No data. "
             "O uso de CPU depende das estatísticas disponíveis no firmware.</p></section></main></body></html>";
     web.sendHeader("Cache-Control", "no-store");

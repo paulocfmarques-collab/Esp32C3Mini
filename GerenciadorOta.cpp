@@ -43,8 +43,9 @@ void GerenciadorOta::iniciar()
         });
 
     ArduinoOTA.onError(
-        [](ota_error_t erro)
+        [this](ota_error_t erro)
         {
+            _monitor.finalizarAtualizacaoOta();
             Serial.printf("[OTA IDE] ERRO (%u): ", erro);
             if (erro == OTA_AUTH_ERROR)
                 LOG_ERROR("Falha na autenticacao de senha");

@@ -10,6 +10,7 @@ void DisplayAmbiental::iniciar()
 {
     LOG_INFO("Iniciando display");
     lcd.init();
+    invalidarLinhas();
     definirLigada(true);
     uint8_t icones[7][8] = {
         {0x04, 0x0A, 0x0A, 0x0E, 0x0E, 0x1F, 0x1F, 0x0E},
@@ -45,6 +46,59 @@ void DisplayAmbiental::definirLigada(bool ativa)
     {
         lcd.noDisplay();
         lcd.noBacklight();
+    }
+}
+
+void DisplayAmbiental::invalidarLinhas()
+{
+    for (uint8_t i = 0; i < 4; ++i) linhasAnteriores[i] = "\x01";
+}
+
+void DisplayAmbiental::escreverLinha(uint8_t linha, String texto)
+{
+    texto = texto.substring(0, 20);
+    while (texto.length() < 20) texto += ' ';
+    if (linhasAnteriores[linha] == texto) return;
+    lcd.setCursor(0, linha);
+    lcd.print(texto);
+    linhasAnteriores[linha] = texto;
+}
+
+void DisplayAmbiental::mostrarPagina(uint8_t pagina, const String& dataHora,
+                                    const LeituraAmbiental& local, float temperaturaExterna,
+                                    float umidadeExterna, const String& ip, const String& ssid,
+                                    int rssi, bool conectado, bool localEmCache)
+{
+    if (!ligada) return;
+    auto coluna = [](String texto)
+    {
+        texto = texto.substring(0, 10);
+        while (texto.length() < 10) texto += ' ';
+        return texto;
+    };
+    auto temperatura = [](float valor)
+    {
+        String texto = isfinite(valor) ? String(valor, 1) : String("--");
+        texto += char(223);
+        return texto + "C";
+    };
+    if (pagina == 0)
+    {
+        // Slots CGRAM 1 e 2, carregados em iniciar(): termômetro e gota.
+        const String termometro = String(char(1)) + " ";
+        const String umidade = String(char(2)) + " ";
+        escreverLinha(0, dataHora);
+        escreverLinha(1, coluna(localEmCache ? "LOCAL*" : "LOCAL") + "POA");
+        escreverLinha(2, coluna(termometro + temperatura(local.temperatura)) + coluna(termometro + temperatura(temperaturaExterna)));
+        escreverLinha(3, coluna(umidade + (isfinite(local.umidade) ? String(local.umidade, 0) : String("--")) + "%") +
+                         coluna(umidade + (isfinite(umidadeExterna) ? String(umidadeExterna, 0) : String("--")) + "%"));
+    }
+    else
+    {
+        escreverLinha(0, conectado ? "REDE: CONECTADA" : "REDE: SEM CONEXAO");
+        escreverLinha(1, "IP: " + (ip.isEmpty() || ip == "0.0.0.0" ? String("indisponivel") : ip));
+        escreverLinha(2, "WiFi: " + (ssid.isEmpty() ? String("Portal AP") : ssid));
+        escreverLinha(3, conectado ? "Sinal: " + String(rssi) + " dBm" : String("Sem sinal STA"));
     }
 }
 
@@ -118,6 +172,7 @@ void DisplayAmbiental::mostrarLeitura(const LeituraAmbiental& leitura)
 
 void DisplayAmbiental::iniciarAtualizacaoOta()
 {
+    invalidarLinhas();
     layoutDesenhado = false;
     lcd.clear();
     lcd.setCursor(0, 0);

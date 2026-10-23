@@ -5,6 +5,10 @@
 #include "GerenciadorWifi.h"
 #include "ServicoMeteorologico.h"
 #include <math.h>
+#include "BotaoExterno.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
 
 class MonitorAmbiental
 {
@@ -22,9 +26,22 @@ class MonitorAmbiental
     DisplayAmbiental display;
     GerenciadorWifi wifi;
     RelogioNtp& relogio = wifi.obterRelogio();
+    static constexpr uint8_t PINO_BOTAO = 3;
+    BotaoExterno botao;
+    QueueHandle_t filaBotao = nullptr;
+    uint8_t paginaLcd = 0;
+    uint32_t ultimaInteracaoLcd = 0;
+    bool ignorarGestoBotao = false;
+    bool atualizarLcd = true;
+    bool otaEmAndamento = false;
+    LeituraAmbiental leituraLcd{NAN, NAN};
+    void iniciarBotao();
+    void processarBotao();
+    void tratarEventoBotao(BotaoExterno::Evento evento);
+    static void tarefaBotao(void* contexto);
 
   public:
-    void definirTelaLigada(bool ligada) { display.definirLigada(ligada); }
+    void definirTelaLigada(bool ligada);
     bool telaLigada() const { return display.estaLigada(); }
 
     LeituraAmbiental lerSensor()
@@ -35,6 +52,7 @@ class MonitorAmbiental
     void iniciar();
     void atualizar();
     void iniciarAtualizacaoOta();
+    void finalizarAtualizacaoOta() { otaEmAndamento = false; atualizarLcd = true; }
     void mostrarProgressoOta(uint8_t porcentagem);
     bool wifiConectado() const;
     bool forcarSincronizacaoClima();

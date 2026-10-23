@@ -1,5 +1,34 @@
 # Prometheus — ESP32C3Mini
 
+## Monitoramento UDP
+
+| Métrica | Tipo | Escopo |
+| --- | --- | --- |
+| `esp_udp_listener_up` | gauge | 1 quando bind da porta UDP 4210 foi bem-sucedido, 0 se falhou. |
+| `esp_udp_packets_received_total` | counter | Datagramas não vazios reportados por parsePacket, incluindo comandos inválidos. |
+| `esp_udp_replies_sent_total` | counter | Respostas completamente escritas e aceitas por endPacket. |
+| `esp_udp_send_errors_total` | counter | Uma falha por tentativa de resposta com erro em beginPacket, escrita ou endPacket. |
+
+Todos incluem o label global `device` (MAC). Contadores são desde boot e não
+são zerados por `reset_counters` (que atua somente nos persistentes de boot/WDT).
+Listener indica resultado local do bind, não teste de conectividade externa.
+Envio UDP bem-sucedido não comprova entrega ao destinatário. Comandos que
+reiniciam antes de retornar não chegam ao fechamento/contabilização da resposta.
+Pacotes somente com espaços são recebidos, mas não geram resposta; datagramas
+vazios que parsePacket não reporta não são contados. Mensagens maiores que 255
+bytes ou incompletas geram erro textual sem executar comando truncado.
+
+## MQTT do Home Assistant
+
+`mqtt_connected` é gauge 1 quando o cliente MQTT está conectado ao broker,
+0 caso contrário, inclusive quando desativado. `mqtt_messages_sent`,
+`mqtt_messages_received` e `mqtt_publish_errors` agora são **counters reais**
+desde boot, em vez de placeholders NaN. Contam chamadas publish bem-sucedidas,
+mensagens entregues ao callback e chamadas publish que falharam, respectivamente.
+Não contam ACKs/pings, nem garantem consumo remoto. Incluem descoberta,
+disponibilidade e limpeza de tópicos. `esp_metric_supported{group="mqtt"}` vale 1.
+Veja [homeassistant.md](homeassistant.md) para instalação e configuração.
+
 ## Painéis de SD sem dados
 
 Por solicitação do usuário, o Mini não exporta nenhuma série `sdcard_*`,
@@ -224,7 +253,7 @@ por scrape.
 Os nomes abaixo, **exceto SD e logs**, são publicados como **gauges NaN**, mesmo
 os nomes que serão contadores quando forem integrados. SD e logs são omitidos
 da exportação. Não há montagem SD nem gravação de logs em
-cartão, GPIO monitorado, instrumentação elétrica, relés ou cliente MQTT no Mini
+cartão, GPIO monitorado, instrumentação elétrica ou relés no Mini
 atual. Isso inclui métricas de gravações/erros de log e uso do cartão usadas por
 alguns painéis Grafana: essas séries não são publicadas, para indicar No data.
 
@@ -233,7 +262,6 @@ alguns painéis Grafana: essas séries não são publicadas, para indicar No dat
 | Energia | `esp_voltage_v`, `esp_current_ma`, `esp_power_w`, `esp_battery_percent`, `esp_battery_voltage_v` |
 | Relés | `relay_state`, `relay_activation_count`, `relay_runtime_seconds` |
 | GPIO | `gpio_digital_input`, `gpio_digital_output`, `gpio_analog_value` |
-| MQTT | `mqtt_connected`, `mqtt_messages_sent`, `mqtt_messages_received`, `mqtt_publish_errors` |
 | SD e logs | `sdcard_present`, `sdcard_mounted`, `sdcard_capacity_bytes`, `sdcard_total_bytes`, `sdcard_used_bytes`, `sdcard_free_bytes`, `sdcard_usage_percent`, `sdcard_read_errors_total`, `sdcard_write_errors_total`, `sdcard_log_size_bytes`, `sdcard_log_exists`, `sdcard_log_writes_total`, `sdcard_log_errors_total`, `sdcard_crash_reports_total`, `sdcard_crash_errors_total`, `sdcard_last_sample_uptime_seconds` |
 
 NaN não significa cartão ausente, relé desligado ou corrente zero: a medição
@@ -243,7 +271,7 @@ dados após atualizar o firmware; painéis de SD e logs continuarão sem valores
 até que essas integrações sejam implementadas.
 
 `esp_metric_supported{group="..."}` vale 0 para `energy`, `pressure`,
-`air_quality`, `relays`, `gpio`, `mqtt` e `sdcard`, e 1 para `dht22` e
+`air_quality`, `relays`, `gpio` e `sdcard`, e 1 para `mqtt`, `dht22` e
 `cpu_temperature`. Para `cpu_usage`, vale 1 se o SDK tiver estatísticas de
 runtime habilitadas e 0 caso contrário. Indica suporte implementado, não
 presença física/validade da leitura.
@@ -275,7 +303,7 @@ de retornar não é contabilizado como concluído.
   O endpoint não possui autenticação e destina-se à rede local.
 - Atendimento cooperativo no loop: consulta HTTPS de clima, sincronização e
   comandos longos podem atrasar o scrape.
-- Sem dependências externas novas além do core ESP32/Arduino.
+- A integração Home Assistant requer PubSubClient >= 2.8, de Nick O'Leary.
 
 Referências oficiais: [formato Prometheus](https://prometheus.io/docs/instrumenting/exposition_formats/)
 e [coleta HTTP](https://prometheus.io/docs/introduction/faq/).

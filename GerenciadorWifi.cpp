@@ -3,10 +3,12 @@
 #include "MonitorAmbiental.h"
 #include "ProcessadorComandos.h"
 #include "ServicoPrometheus.h"
+#include "IntegracaoHomeAssistant.h"
 
 extern MonitorAmbiental monitor;
 extern ProcessadorComandos processador;
 extern ServicoPrometheus prometheus;
+extern IntegracaoHomeAssistant homeAssistant;
 
 namespace
 {
@@ -335,6 +337,7 @@ void GerenciadorWifi::configurarRotas()
     servidor.on("/api/dados", HTTP_GET, [this]() { prometheus.atender([this]() { apiDados(); }); });
     servidor.on("/api/comando", HTTP_GET, [this]() { prometheus.atender([this]() { executarComandoWeb(); }); });
     prometheus.configurarRotas(servidor);
+    homeAssistant.configurarRotas(servidor);
     servidor.onNotFound([this]()
     {
         prometheus.atender([this]() { prometheus.responder(servidor, 404, "text/plain; charset=utf-8", "Página não encontrada."); });
@@ -409,7 +412,7 @@ details{margin-top:24px;border-top:1px solid var(--line);padding:20px 0}summary{
 .nav-inner,.links{flex-wrap:wrap}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
-<nav aria-label="Navegação principal"><div class="nav-inner"><a href="/" class="brand"><span class="mark" aria-hidden="true">↗</span> Monitor Ambiental</a><div class="links"><a class="active" aria-current="page" href="/">Visão geral</a><a href="/config">Wi-Fi</a><a href="/prometheus">Prometheus</a></div></div></nav>
+<nav aria-label="Navegação principal"><div class="nav-inner"><a href="/" class="brand"><span class="mark" aria-hidden="true">↗</span> Monitor Ambiental</a><div class="links"><a class="active" aria-current="page" href="/">Visão geral</a><a href="/config">Wi-Fi</a><a href="/prometheus">Prometheus</a><a href="/homeassistant">Home Assistant</a></div></div></nav>
 <main><header class="intro"><div><div class="eyebrow">Seu espaço, em tempo real</div><h1>Como está o ambiente?</h1><p>As condições de agora, dentro e fora de casa.</p></div><div class="connection"><span id="status" class="badge" role="status">Conectando</span><p id="datetime">Aguardando dados</p></div></header>
 <section class="metrics" aria-label="Leituras atuais">
 <article class="card metric primary"><div class="metric-top"><span class="eyebrow">Temperatura local</span><span class="symbol" aria-hidden="true">°</span></div><div class="reading"><span id="temp">—</span> <small>°C</small></div><p id="tendencia">Aguardando leitura do sensor</p></article>
